@@ -110,3 +110,42 @@ Além disso, a opção de upload deve ser tratada como entrada não confiável: 
 - Dockur Windows — projeto e requisitos: https://github.com/dockur/windows
 - Dockur Windows — variáveis de ambiente: https://github.com/dockur/windows/blob/master/docs/environment.md
 - noVNC — interface de teclado em dispositivos táteis: https://github.com/novnc/noVNC/blob/master/vnc.html
+
+
+## Launcher Python
+
+O projeto tem um ponto de entrada em Python que funciona sem bibliotecas externas:
+
+    python3 launcher.py
+
+O launcher verifica Python, KVM, RAM, espaço livre, Docker e Docker Compose; cria o .env na primeira execução; e depois inicia a stack.
+
+Verificação sem iniciar:
+
+    python3 launcher.py --check-only
+
+Iniciar com os valores definidos no .env:
+
+    python3 launcher.py
+
+Forçar uma configuração:
+
+    python3 launcher.py --ram 8G --disk 100G --cpu 4
+
+Ver estado:
+
+    python3 launcher.py --status
+
+Ver logs:
+
+    python3 launcher.py --logs
+
+Parar:
+
+    python3 launcher.py --down
+
+Windows 10 pode ser escolhido explicitamente, sem alterar o padrão do projeto:
+
+    python3 launcher.py --windows-version 10
+
+O launcher não instala Docker nem altera a BIOS/UEFI automaticamente. Quando o host não oferece KVM/nested virtualization, ele pára com uma mensagem clara.
