@@ -565,8 +565,9 @@ def start_vm(values: dict[str, str], qemu: str, novnc: str, use_kvm: bool) -> No
     iso_path = ROOT / values["WINDOWS_ISO"]
     disk_size = values["WINDOWS_DISK_SIZE"]
 
-    _, disk_size_gib = parse_gib(values["WINDOWS_RAM"]), parse_gib(disk_size)
-    check_resources(disk_size_gib, disk_size_gib)
+    ram_gib = parse_gib(values["WINDOWS_RAM"])
+    disk_size_gib = parse_gib(disk_size)
+    check_resources(ram_gib, disk_size_gib)
 
     created = ensure_disk(
         shutil.which("qemu-img") or "qemu-img",
