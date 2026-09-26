@@ -199,31 +199,24 @@ def find_ovmf(values: dict[str, str]) -> tuple[Path, Path]:
     vars_file = Path(values["OVMF_VARS"]) if values.get("OVMF_VARS") else None
 
     if not code or not vars_file:
-        bundled_root = PYTHON_RUNTIME_DIR / "quicksand_qemu" / "share"
-        if bundled_root.exists():
-            for fd in bundled_root.rglob("*.fd"):
-                name = fd.name.lower()
-                if code is None and "code" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
-                    code = fd
-                if vars_file is None and "vars" in name and ("x86_64" in name or "i386" in name or "ovmf" in name or "efi" in name):
-                    vars_file = fd
+        _, _, bundled_code, bundled_vars = bundled_qemu_paths()
+        code = code or bundled_code
+        vars_file = vars_file or bundled_vars
 
-    code = code or find_first(
-        [
-            "/usr/share/OVMF/OVMF_CODE_4M.fd",
-            "/usr/share/OVMF/OVMF_CODE.fd",
-            "/usr/share/edk2/ovmf/OVMF_CODE.fd",
-            "/usr/share/edk2/ovmf/x64/OVMF_CODE.fd",
-        ]
-    )
-    vars_file = vars_file or find_first(
-        [
-            "/usr/share/OVMF/OVMF_VARS_4M.fd",
-            "/usr/share/OVMF/OVMF_VARS.fd",
-            "/usr/share/edk2/ovmf/OVMF_VARS.fd",
-            "/usr/share/edk2/ovmf/x64/OVMF_VARS.fd",
-        ]
-    )
+    code = code or find_first([
+        "/usr/share/OVMF/OVMF_CODE_4M.fd",
+        "/usr/share/OVMF/OVMF_CODE.fd",
+        "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+        "/usr/share/edk2/ovmf/x64/OVMF_CODE.fd",
+        "/usr/share/qemu/edk2-x86_64-code.fd",
+    ])
+    vars_file = vars_file or find_first([
+        "/usr/share/OVMF/OVMF_VARS_4M.fd",
+        "/usr/share/OVMF/OVMF_VARS.fd",
+        "/usr/share/edk2/ovmf/OVMF_VARS.fd",
+        "/usr/share/edk2/ovmf/x64/OVMF_VARS.fd",
+        "/usr/share/qemu/edk2-i386-vars.fd",
+    ])
 
     if not code or not vars_file:
         raise RuntimeError(
@@ -232,7 +225,6 @@ def find_ovmf(values: dict[str, str]) -> tuple[Path, Path]:
         )
 
     return code, vars_file
-
 
 def check_python() -> None:
     if sys.version_info < (3, 10):
@@ -321,28 +313,35 @@ def privileged_prefix() -> list[str] | None:
     return None
 
 
-def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None]:
-    """Procura o QEMU instalado no espaço do utilizador, sem root."""
+def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None, Path | None]:
+    """Procura o QEMU e o par UEFI no espaço do utilizador, sem root."""
     root = PYTHON_RUNTIME_DIR / "quicksand_qemu"
     qemu = root / "bin" / "qemu-system-x86_64"
     qemu_img = root / "bin" / "qemu-img"
     if not qemu.exists():
-        return None, None, None
+        return None, None, None, None
 
-    ovmf_code = None
-    ovmf_vars = None
-    for fd in (root / "share").rglob("*.fd"):
-        name = fd.name.lower()
-        if ovmf_code is None and "code" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
-            ovmf_code = fd
-        if ovmf_vars is None and "vars" in name and ("x86_64" in name or "i386" in name or "ovmf" in name or "efi" in name):
-            ovmf_vars = fd
-    return qemu, qemu_img if qemu_img.exists() else None, ovmf_code
-
+    share_qemu = root / "share" / "qemu"
+    code_candidates = [
+        share_qemu / "edk2-x86_64-code.fd",
+        share_qemu / "ovmf-x86_64-4m-code.bin",
+        share_qemu / "OVMF_CODE_4M.fd",
+        share_qemu / "OVMF_CODE.fd",
+    ]
+    vars_candidates = [
+        share_qemu / "edk2-i386-vars.fd",
+        share_qemu / "edk2-x86_64-vars.fd",
+        share_qemu / "ovmf-x86_64-4m-vars.bin",
+        share_qemu / "OVMF_VARS_4M.fd",
+        share_qemu / "OVMF_VARS.fd",
+    ]
+    ovmf_code = next((p for p in code_candidates if p.exists()), None)
+    ovmf_vars = next((p for p in vars_candidates if p.exists()), None)
+    return qemu, qemu_img if qemu_img.exists() else None, ovmf_code, ovmf_vars
 
 def try_install_user_qemu() -> bool:
     """Instala QEMU pré-compilado no diretório do projeto, sem privilégios."""
-    qemu, qemu_img, _ = bundled_qemu_paths()
+    qemu, qemu_img, _, _ = bundled_qemu_paths()
     if qemu and qemu_img:
         return True
 
@@ -367,7 +366,7 @@ def try_install_user_qemu() -> bool:
         warn("Não foi possível instalar o QEMU local via pip.")
         return False
 
-    qemu, qemu_img, _ = bundled_qemu_paths()
+    qemu, qemu_img, _, _ = bundled_qemu_paths()
     if qemu and qemu_img:
         ok("QEMU local preparado sem root.")
         return True
@@ -451,6 +450,7 @@ def ensure_runtime_dependencies(values: dict[str, str]) -> None:
     needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
     if needs_qemu and values.get("AUTO_INSTALL_QEMU", "Y").upper() == "Y":
         try_install_user_qemu()
+
     needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
     needs_novnc = not command_exists("novnc_proxy")
     try:
@@ -459,16 +459,22 @@ def ensure_runtime_dependencies(values: dict[str, str]) -> None:
     except Exception:
         needs_ovmf = True
 
-    if needs_qemu or needs_novnc or needs_ovmf:
+    # noVNC pode ser obtido sem root.
+    try_install_user_novnc()
+
+    # Só tenta o gestor de pacotes do sistema quando ainda falta algo que
+    # não foi resolvido pelo runtime portátil. Evita os erros do apt desta hospedagem.
+    if needs_qemu or needs_ovmf or (needs_novnc and not (RUNTIME_DIR / "novnc" / "utils" / "novnc_proxy").exists()):
         try_install_system_dependencies(values)
 
+    # Um clone local de noVNC pode existir mesmo depois da tentativa do gestor de pacotes.
     try_install_user_novnc()
 
 
 def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
     ensure_runtime_dependencies(values)
 
-    bundled_qemu, bundled_qemu_img, _ = bundled_qemu_paths()
+    bundled_qemu, bundled_qemu_img, _, _ = bundled_qemu_paths()
     qemu = command_exists("qemu-system-x86_64") or (str(bundled_qemu) if bundled_qemu else None)
     qemu_img = command_exists("qemu-img") or (str(bundled_qemu_img) if bundled_qemu_img else None)
     novnc = command_exists("novnc_proxy")
@@ -666,6 +672,7 @@ def build_qemu_command(
         cpu_model = "max"
 
     command = [
+        "-L", str(ovmf_code.parent),
         qemu,
         "-name", "windows-emulator-online",
         "-machine", machine,
@@ -806,7 +813,7 @@ def start_vm(values: dict[str, str], qemu: str, novnc: str, use_kvm: bool) -> No
 
     qemu_img_path = shutil.which("qemu-img")
     if not qemu_img_path:
-        _, bundled_img, _ = bundled_qemu_paths()
+        _, bundled_img, _, _ = bundled_qemu_paths()
         qemu_img_path = str(bundled_img) if bundled_img else None
     if not qemu_img_path:
         raise RuntimeError("qemu-img não está disponível.")
