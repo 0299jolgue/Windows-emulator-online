@@ -438,7 +438,6 @@ def build_qemu_command(
         "-vnc", f"{vnc_bind}:{vnc_display}",
         "-monitor", "none",
         "-serial", "none",
-        "-no-reboot",
     ]
 
     if first_boot:
