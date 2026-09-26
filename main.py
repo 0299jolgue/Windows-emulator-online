@@ -521,7 +521,7 @@ def start_novnc(values: dict[str, str], novnc: str) -> None:
     web = locate_novnc_web(values)
     vnc_host = values.get("VNC_BIND", "127.0.0.1")
     vnc_port = int(values.get("VNC_PORT", "5900"))
-    listen = int(values.get("NOVNC_PORT", "6080"))
+    listen = int(values.get("NOVNC_PORT", "80"))
     bind = values.get("NOVNC_BIND", "0.0.0.0")
 
     command = [
@@ -609,11 +609,11 @@ def start_vm(values: dict[str, str], qemu: str, novnc: str) -> None:
         warn("Conclui a instalação dentro do noVNC; nos próximos arranques arrancará pelo disco.")
     print()
     print(color(
-        f"    noVNC: http://IP_DO_SERVIDOR:{values.get('NOVNC_PORT', '6080')}/vnc.html",
+        f"    noVNC: http://IP_DO_SERVIDOR:{values.get('NOVNC_PORT', '80')}/vnc.html",
         "1;32",
     ))
     print(color(
-        f"    Domínio: aponta o teu subdomínio da hospedagem para a porta {values.get('NOVNC_PORT', '6080')}.",
+        f"    Domínio: aponta o teu subdomínio da hospedagem para a porta {values.get('NOVNC_PORT', '80')}.",
         "1;32",
     ))
     print()
@@ -630,7 +630,7 @@ def show_status(values: dict[str, str]) -> None:
         extra = f" (PID {pid})" if pid and process_alive(pid) else ""
         print(f"{label}: {state}{extra}")
 
-    print(f"Porta noVNC: {values.get('NOVNC_PORT', '6080')}")
+    print(f"Porta noVNC: {values.get('NOVNC_PORT', '80')}")
 
 
 def show_logs() -> None:
