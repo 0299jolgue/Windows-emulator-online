@@ -21,17 +21,7 @@ O `main.py` prepara o armazenamento e inicia QEMU/KVM e noVNC diretamente no hos
 
 ## O que precisas na hospedagem
 
-O servidor precisa de permitir:
-
-- Linux
-- `/dev/kvm` com leitura/escrita
-- virtualização KVM/nested virtualization
-- QEMU (`qemu-system-x86_64` e `qemu-img`)
-- OVMF/UEFI
-- noVNC (`novnc_proxy`)
-- `swtpm` é recomendado para Windows 11
-
-Se a hospedagem for apenas alojamento web normal, sem processos persistentes e sem KVM, este projeto não consegue executar uma VM Windows.
+O servidor precisa de permitir Linux e um processo persistente. KVM é opcional porque o projeto tem fallback para TCG. QEMU/OVMF/noVNC/swtpm são instalados automaticamente quando o sistema permite instalação; caso contrário, a hospedagem tem de os disponibilizar.
 
 ## Configuração
 
