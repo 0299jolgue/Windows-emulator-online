@@ -194,9 +194,71 @@ def find_first(paths: list[str]) -> Path | None:
     return None
 
 
+UEFI_RUNTIME_DIR = RUNTIME_DIR / "uefi"
+UEFI_ARCHIVE = UEFI_RUNTIME_DIR / "edk2-prebuilt.tar.xz"
+UEFI_CODE_PATH = UEFI_RUNTIME_DIR / "OVMF_CODE.fd"
+UEFI_VARS_PATH = UEFI_RUNTIME_DIR / "OVMF_VARS.fd"
+UEFI_URL = "https://github.com/rust-osdev/ovmf-prebuilt/releases/download/edk2-stable202511-r1/edk2-stable202511-r1-bin.tar.xz"
+UEFI_SHA256 = "79841c5dcac6d4bb71ead5edb6ca2a251237330be3c0b166bdc8a8fec0ce760d"
+
+def ensure_uefi_firmware() -> tuple[Path, Path] | None:
+    """Instala OVMF automaticamente no espaço do projeto, sem root."""
+    if UEFI_CODE_PATH.exists() and UEFI_VARS_PATH.exists():
+        return UEFI_CODE_PATH, UEFI_VARS_PATH
+
+    try:
+        import hashlib
+        import tarfile
+        import urllib.request
+
+        UEFI_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        info("OVMF/UEFI não está disponível; a instalar firmware UEFI local...")
+
+        if not UEFI_ARCHIVE.exists() or hashlib.sha256(UEFI_ARCHIVE.read_bytes()).hexdigest() != UEFI_SHA256:
+            if UEFI_ARCHIVE.exists():
+                UEFI_ARCHIVE.unlink()
+            tmp = UEFI_ARCHIVE.with_suffix(".download")
+            try:
+                with urllib.request.urlopen(UEFI_URL, timeout=60) as response, open(tmp, "wb") as handle:
+                    shutil.copyfileobj(response, handle)
+                digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
+                if digest != UEFI_SHA256:
+                    raise RuntimeError("checksum SHA-256 do firmware UEFI não corresponde ao esperado.")
+                tmp.replace(UEFI_ARCHIVE)
+            finally:
+                tmp.unlink(missing_ok=True)
+
+        with tarfile.open(UEFI_ARCHIVE, "r:xz") as archive:
+            members = {member.name: member for member in archive.getmembers()}
+            code_name = "edk2-stable202511-r1-bin/x64/code.fd"
+            vars_name = "edk2-stable202511-r1-bin/x64/vars.fd"
+            if code_name not in members or vars_name not in members:
+                raise RuntimeError("O arquivo UEFI não contém os ficheiros x86_64 esperados.")
+            for source_name, target in ((code_name, UEFI_CODE_PATH), (vars_name, UEFI_VARS_PATH)):
+                source = archive.extractfile(members[source_name])
+                if source is None:
+                    raise RuntimeError(f"Não foi possível extrair {source_name}.")
+                with open(target, "wb") as handle:
+                    shutil.copyfileobj(source, handle)
+
+        if not UEFI_CODE_PATH.exists() or not UEFI_VARS_PATH.exists():
+            raise RuntimeError("Os ficheiros OVMF/UEFI não foram criados.")
+        ok("OVMF/UEFI local preparado.")
+        return UEFI_CODE_PATH, UEFI_VARS_PATH
+    except Exception as exc:
+        warn(f"Não foi possível instalar OVMF automaticamente: {exc}")
+        return None
+
+
 def find_ovmf(values: dict[str, str]) -> tuple[Path, Path]:
     code = Path(values["OVMF_CODE"]) if values.get("OVMF_CODE") else None
     vars_file = Path(values["OVMF_VARS"]) if values.get("OVMF_VARS") else None
+
+    local = ensure_uefi_firmware()
+    if local:
+        bundled_code, bundled_vars = local
+        code = code or bundled_code
+        vars_file = vars_file or bundled_vars
 
     if not code or not vars_file:
         _, _, bundled_code, bundled_vars = bundled_qemu_paths()
@@ -220,10 +282,8 @@ def find_ovmf(values: dict[str, str]) -> tuple[Path, Path]:
 
     if not code or not vars_file:
         raise RuntimeError(
-            "Não encontrei OVMF/UEFI. Instala o pacote OVMF/edk2-ovmf "
-            "ou define OVMF_CODE e OVMF_VARS no .env."
+            "Não encontrei OVMF/UEFI. A instalação automática do firmware UEFI também falhou."
         )
-
     return code, vars_file
 
 def check_python() -> None:
