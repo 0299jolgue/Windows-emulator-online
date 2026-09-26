@@ -20,6 +20,8 @@ DATA_DIR = ROOT / "data"
 RUN_DIR = DATA_DIR / "run"
 LOG_DIR = DATA_DIR / "logs"
 RUNTIME_DIR = DATA_DIR / "runtime"
+PYTHON_RUNTIME_DIR = RUNTIME_DIR / "python-packages"
+BUNDLED_QEMU_VERSION = "0.5.7"
 
 PID_FILES = {
     "qemu": RUN_DIR / "qemu.pid",
@@ -110,7 +112,8 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
         "WINDOWS_DISK": "data/windows/windows.qcow2",
         "WINDOWS_DISK_SIZE": args.disk or "100G",
         "WINDOWS_CPU": str(args.cpu or 4),
-        "WINDOWS_RAM": args.ram or "6G",
+        "WINDOWS_RAM": args.ram or "10G",
+        "CONFIG_VERSION": "2",
         "VNC_BIND": "127.0.0.1",
         "VNC_PORT": "5900",
         "NOVNC_BIND": "0.0.0.0",
@@ -119,6 +122,7 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
         "OVMF_CODE": "",
         "OVMF_VARS": "",
         "WINDOWS_TPM": "Y",
+        "AUTO_INSTALL_QEMU": "Y",
     }
 
     if not values:
@@ -127,6 +131,13 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
         warn(".env criado com a configuração inicial.")
     else:
         changed = False
+        # Migração do default antigo: 6G -> 10G.
+        if values.get("CONFIG_VERSION") is None and values.get("WINDOWS_RAM", "").upper() == "6G" and args.ram is None:
+            values["WINDOWS_RAM"] = "10G"
+            changed = True
+        if values.get("CONFIG_VERSION") != "2":
+            values["CONFIG_VERSION"] = "2"
+            changed = True
         requested = {
             "WINDOWS_VERSION": args.windows_version,
             "WINDOWS_CPU": str(args.cpu) if args.cpu is not None else None,
@@ -150,7 +161,7 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
     if auto_tune and values:
         limit_gib = cgroup_memory_limit_gib()
         if limit_gib is not None:
-            current_ram = parse_gib(values.get("WINDOWS_RAM", "6G"))
+            current_ram = parse_gib(values.get("WINDOWS_RAM", "10G"))
             safe_ram = max(4.0, float(int(max(4.0, limit_gib - 1.0))))
             if current_ram > safe_ram:
                 values["WINDOWS_RAM"] = f"{safe_ram:g}G"
@@ -186,6 +197,16 @@ def find_first(paths: list[str]) -> Path | None:
 def find_ovmf(values: dict[str, str]) -> tuple[Path, Path]:
     code = Path(values["OVMF_CODE"]) if values.get("OVMF_CODE") else None
     vars_file = Path(values["OVMF_VARS"]) if values.get("OVMF_VARS") else None
+
+    if not code or not vars_file:
+        bundled_root = PYTHON_RUNTIME_DIR / "quicksand_qemu" / "share"
+        if bundled_root.exists():
+            for fd in bundled_root.rglob("*.fd"):
+                name = fd.name.lower()
+                if code is None and "code" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
+                    code = fd
+                if vars_file is None and "vars" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
+                    vars_file = fd
 
     code = code or find_first(
         [
@@ -300,6 +321,60 @@ def privileged_prefix() -> list[str] | None:
     return None
 
 
+def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None]:
+    """Procura o QEMU instalado no espaço do utilizador, sem root."""
+    root = PYTHON_RUNTIME_DIR / "quicksand_qemu"
+    qemu = root / "bin" / "qemu-system-x86_64"
+    qemu_img = root / "bin" / "qemu-img"
+    if not qemu.exists():
+        return None, None, None
+
+    ovmf_code = None
+    ovmf_vars = None
+    for fd in (root / "share").rglob("*.fd"):
+        name = fd.name.lower()
+        if ovmf_code is None and "code" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
+            ovmf_code = fd
+        if ovmf_vars is None and "vars" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
+            ovmf_vars = fd
+    return qemu, qemu_img if qemu_img.exists() else None, ovmf_code
+
+
+def try_install_user_qemu() -> bool:
+    """Instala QEMU pré-compilado no diretório do projeto, sem privilégios."""
+    qemu, qemu_img, _ = bundled_qemu_paths()
+    if qemu and qemu_img:
+        return True
+
+    PYTHON_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    info(f"A tentar preparar QEMU local ({BUNDLED_QEMU_VERSION}) sem root...")
+    command = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-deps",
+        "--target",
+        str(PYTHON_RUNTIME_DIR),
+        f"quicksand-qemu=={BUNDLED_QEMU_VERSION}",
+    ]
+    result = subprocess.run(command, cwd=str(ROOT), text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout or "").strip().splitlines()[-6:]
+        for line in tail:
+            warn(line)
+        warn("Não foi possível instalar o QEMU local via pip.")
+        return False
+
+    qemu, qemu_img, _ = bundled_qemu_paths()
+    if qemu and qemu_img:
+        ok("QEMU local preparado sem root.")
+        return True
+    warn("O pacote QEMU foi instalado, mas os executáveis esperados não foram encontrados.")
+    return False
+
+
 def try_install_system_dependencies(values: dict[str, str] | None = None) -> bool:
     if values is None:
         values = read_env()
@@ -374,6 +449,9 @@ def try_install_user_novnc() -> None:
 
 def ensure_runtime_dependencies(values: dict[str, str]) -> None:
     needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
+    if needs_qemu and values.get("AUTO_INSTALL_QEMU", "Y").upper() == "Y":
+        try_install_user_qemu()
+    needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
     needs_novnc = not command_exists("novnc_proxy")
     try:
         find_ovmf(read_env())
@@ -390,8 +468,9 @@ def ensure_runtime_dependencies(values: dict[str, str]) -> None:
 def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
     ensure_runtime_dependencies(values)
 
-    qemu = command_exists("qemu-system-x86_64")
-    qemu_img = command_exists("qemu-img")
+    bundled_qemu, bundled_qemu_img, _ = bundled_qemu_paths()
+    qemu = command_exists("qemu-system-x86_64") or (str(bundled_qemu) if bundled_qemu else None)
+    qemu_img = command_exists("qemu-img") or (str(bundled_qemu_img) if bundled_qemu_img else None)
     novnc = command_exists("novnc_proxy")
 
     if not qemu:
@@ -401,7 +480,7 @@ def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
         )
     if not qemu_img:
         raise RuntimeError(
-            "qemu-img não está instalado. A hospedagem precisa disponibilizar o pacote QEMU."
+            "qemu-img não está disponível. Ativa AUTO_INSTALL_QEMU=Y ou usa uma hospedagem que permita QEMU."
         )
 
     if not novnc:
@@ -429,7 +508,7 @@ def validate(values: dict[str, str]) -> tuple[float, float, int]:
     if version not in {"10", "11"}:
         raise RuntimeError("WINDOWS_VERSION deve ser 10 ou 11.")
 
-    ram = parse_gib(values.get("WINDOWS_RAM", "8G"))
+    ram = parse_gib(values.get("WINDOWS_RAM", "10G"))
     disk = parse_gib(values.get("WINDOWS_DISK_SIZE", "100G"))
     cpu = int(values.get("WINDOWS_CPU", "4"))
 
@@ -508,6 +587,11 @@ def start_process(
 ) -> subprocess.Popen[bytes]:
     log_path = LOG_DIR / log_name
     handle = open(log_path, "ab", buffering=0)
+    env = os.environ.copy()
+    bundled_lib = PYTHON_RUNTIME_DIR / "quicksand_qemu" / "lib"
+    if bundled_lib.exists():
+        previous = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = str(bundled_lib) + (os.pathsep + previous if previous else "")
     process = subprocess.Popen(
         command,
         cwd=str(ROOT),
@@ -515,6 +599,7 @@ def start_process(
         stdout=handle,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        env=env,
     )
     handle.close()
     PID_FILES[name].write_text(str(process.pid), encoding="utf-8")
@@ -719,11 +804,13 @@ def start_vm(values: dict[str, str], qemu: str, novnc: str, use_kvm: bool) -> No
     disk_size_gib = parse_gib(disk_size)
     check_resources(ram_gib, disk_size_gib)
 
-    created = ensure_disk(
-        shutil.which("qemu-img") or "qemu-img",
-        disk_path,
-        disk_size,
-    )
+    qemu_img_path = shutil.which("qemu-img")
+    if not qemu_img_path:
+        _, bundled_img, _ = bundled_qemu_paths()
+        qemu_img_path = str(bundled_img) if bundled_img else None
+    if not qemu_img_path:
+        raise RuntimeError("qemu-img não está disponível.")
+    created = ensure_disk(qemu_img_path, disk_path, disk_size)
 
     ovmf_code, ovmf_vars_template = find_ovmf(values)
     vars_target = RUN_DIR / "OVMF_VARS.fd"
