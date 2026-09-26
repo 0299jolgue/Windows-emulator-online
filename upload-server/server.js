@@ -82,6 +82,7 @@ function upload(req, res) {
   const files = [];
   let hadError = false;
   let fatalError = null;
+  const pendingWrites = [];
 
   busboy.on("file", (fieldname, stream, info) => {
     const original = info?.filename || "file";
@@ -129,6 +130,7 @@ function upload(req, res) {
       fsp.unlink(destination).catch(() => {});
     });
 
+    pendingWrites.push(finished);
     finished.catch((error) => {
       hadError = true;
       fatalError = error;
@@ -146,6 +148,13 @@ function upload(req, res) {
   });
 
   busboy.on("finish", async () => {
+    const results = await Promise.allSettled(pendingWrites);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      hadError = true;
+      fatalError = fatalError || failed.reason;
+    }
+
     if (hadError || fatalError) {
       return json(res, 400, {
         error: fatalError?.message || "Falha ao receber o upload.",
