@@ -205,7 +205,7 @@ def find_ovmf(values: dict[str, str]) -> tuple[Path, Path]:
                 name = fd.name.lower()
                 if code is None and "code" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
                     code = fd
-                if vars_file is None and "vars" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
+                if vars_file is None and "vars" in name and ("x86_64" in name or "i386" in name or "ovmf" in name or "efi" in name):
                     vars_file = fd
 
     code = code or find_first(
@@ -335,7 +335,7 @@ def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None]:
         name = fd.name.lower()
         if ovmf_code is None and "code" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
             ovmf_code = fd
-        if ovmf_vars is None and "vars" in name and ("x86_64" in name or "ovmf" in name or "efi" in name):
+        if ovmf_vars is None and "vars" in name and ("x86_64" in name or "i386" in name or "ovmf" in name or "efi" in name):
             ovmf_vars = fd
     return qemu, qemu_img if qemu_img.exists() else None, ovmf_code
 
