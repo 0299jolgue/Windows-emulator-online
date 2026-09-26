@@ -1,151 +1,178 @@
 # Windows Emulator Online
 
-Um Windows 11 num servidor Linux, acessível pelo navegador na porta 80, com:
+Uma VM Windows num servidor Linux, sem Docker e sem Nginx.
 
-- VM Windows executada com QEMU/KVM através do Dockur Windows
-- visualizador web/noVNC fornecido pelo próprio Dockur
-- botão Enviar ficheiros que coloca os ficheiros na pasta Shared do Windows
-- botão Teclado pensado para iPad e outros dispositivos táteis
-- configuração simples por .env
-- armazenamento persistente em data/windows
-- ficheiros enviados persistidos em data/shared
+A arquitetura agora é direta:
 
-## Requisitos do servidor
+```
+subdomínio da hospedagem
+        │
+        ▼
+      noVNC
+        │
+        ▼
+    QEMU/KVM
+        │
+        ▼
+      Windows
+```
 
-O Windows 11 tem como requisitos mínimos oficiais da Microsoft 4 GB de RAM e 64 GB de armazenamento. O Dockur Windows indica também que o host precisa de Docker/Podman, suporte a KVM e pelo menos 2 GB de RAM disponível e 32 GB de disco livre para o seu próprio container. Para uma VM Windows 11 utilizável remotamente, estes números são apenas o ponto de partida.
+O `main.py` prepara o armazenamento e inicia QEMU/KVM e noVNC diretamente no host.
 
-| Recurso | Mínimo para Windows 11 | Recomendado para este projeto |
-|---|---:|---:|
-| RAM da VM | 4 GB | 8 GB |
-| Disco da VM | 64 GB | 100 GB |
-| CPU da VM | 2 cores | 4 cores |
-| RAM total do servidor | 8 GB | 16 GB |
-| Espaço total do servidor | 100 GB | 150–200 GB SSD |
+## O que precisas na hospedagem
 
-O disco da VM é expansível, mas aumentar o tamanho do disco virtual não estende automaticamente a partição do Windows. Faça isso dentro do Windows depois, se necessário.
+O servidor precisa de permitir:
 
-## Arranque
+- Linux
+- `/dev/kvm` com leitura/escrita
+- virtualização KVM/nested virtualization
+- QEMU (`qemu-system-x86_64` e `qemu-img`)
+- OVMF/UEFI
+- noVNC (`novnc_proxy`)
+- `swtpm` é recomendado para Windows 11
 
-1. Copie o ficheiro de exemplo:
-   cp .env.example .env
+Se a hospedagem for apenas alojamento web normal, sem processos persistentes e sem KVM, este projeto não consegue executar uma VM Windows.
 
-2. Abra .env e altere pelo menos WINDOWS_PASSWORD.
+## Configuração
 
-3. Inicie:
-   docker compose up -d --build
+1. Coloca a ISO oficial do Windows na localização definida por `WINDOWS_ISO`. Por defeito:
 
-4. Abra:
-   http://IP_DO_SERVIDOR/
+```text
+data/Windows11.iso
+```
 
-Na primeira instalação, o Dockur descarrega a imagem do Windows e executa a instalação automaticamente. A primeira inicialização é, por isso, significativamente mais demorada do que as seguintes.
+2. Executa:
 
-## Porta 80
+```bash
+python3 main.py --check-only
+```
 
-Só o serviço web publica uma porta: 80:80.
+3. Se as verificações passarem:
 
-O Windows fica na rede interna do Docker em 8006, e o Nginx encaminha o visualizador para a porta 80. O RDP não é publicado pelo projeto por defeito.
+```bash
+python3 main.py
+```
 
-## Enviar ficheiros para o Windows
+Na primeira execução, o programa cria:
 
-O botão Enviar ficheiros envia o conteúdo para data/shared no host.
+```text
+data/windows/windows.qcow2
+data/run/
+data/logs/
+```
 
-O Dockur cria uma pasta/partilha Shared no Windows através de Samba. Depois de o Windows arrancar, os ficheiros enviados aparecem nessa pasta.
+A primeira execução arranca pela ISO para instalar o Windows. Depois de a instalação terminar, os arranques seguintes usam o disco virtual.
 
-O limite do projeto é de 2 GiB por ficheiro por defeito. Pode alterar MAX_FILE_SIZE no .env.
+## Subdomínio da hospedagem
 
-## Teclado no iPad
+O noVNC fica por defeito na porta `6080`.
 
-O botão Teclado chama o controlo de teclado tátil do noVNC quando ele está disponível. O noVNC expõe explicitamente esse botão para dispositivos táteis.
+Na tua hospedagem, cria o site/subdomínio, por exemplo:
 
-No iPad, toca em Teclado antes de escrever. Isto evita depender de um teclado físico e usa o mecanismo de entrada do visualizador.
+```text
+nomequemeter.shardweb.app
+```
 
-## Windows 11 e Windows 10
+e configura o proxy/encaminhamento desse domínio para:
 
-O projeto vem configurado para Windows 11.
+```text
+127.0.0.1:6080
+```
 
-Não fiz um downgrade automático para Windows 10. O suporte do Windows 10 terminou em 14 de outubro de 2025, portanto, em 2026, é preferível manter o Windows 11 e resolver eventuais incompatibilidades do host/KVM.
+ou para a porta interna `6080` conforme o painel da hospedagem.
 
-Ainda assim, a imagem pode ser alterada manualmente para Windows 10 colocando WINDOWS_VERSION=10 no .env.
+Não é preciso Nginx dentro deste projeto. A própria hospedagem faz o encaminhamento do domínio para o noVNC.
 
-Se a instalação já tiver criado data/windows, mudar WINDOWS_VERSION não converte a instalação existente. Para instalar outra versão, use uma pasta de armazenamento nova/vazia.
+Para verificar sem domínio, abre:
 
-## KVM
+```text
+http://IP_DO_SERVIDOR:6080/vnc.html
+```
 
-O projeto depende de /dev/kvm para aceleração de hardware. No host Linux, confirme:
+## iPad e teclado
 
-ls -l /dev/kvm
+O noVNC já fornece os controlos de entrada para dispositivos táteis. No iPad, abre o menu do noVNC e usa o botão de teclado quando precisares de escrever.
 
-e certifique-se de que a virtualização está ativa na BIOS/UEFI.
+Não é necessário instalar um teclado web adicional no projeto.
 
-Se o seu fornecedor de hosting não disponibilizar KVM/nested virtualization, uma VM Windows baseada em QEMU pode ficar extremamente lenta ou nem iniciar corretamente. Nesse caso, o problema é a capacidade do host, não a interface web.
+## Ficheiros
 
-## Licenciamento
+O antigo uploader Node foi removido juntamente com o Docker e o Nginx.
 
-Este repositório não contorna ativação do Windows. Use uma licença/chave válida conforme os termos da Microsoft. O container Dockur também permite configurar uma chave através da variável KEY caso queira fazer isso durante a instalação.
+A VM pode continuar a usar o armazenamento persistente em `data/windows`, mas o upload de ficheiros pelo próprio site deixou de fazer parte desta versão simples.
 
-## Segurança
+Podes transferir ficheiros usando um método disponibilizado pela própria hospedagem, uma partilha de rede configurada no Windows, ou outra ferramenta de transferência que o teu servidor permita.
 
-Este projeto expõe um desktop Windows diretamente na Internet através da porta 80. Para uso público, coloque-o atrás de HTTPS e de uma camada de autenticação/rede confiável antes de o disponibilizar a terceiros.
+## Windows 10 e Windows 11
 
-Além disso, a opção de upload deve ser tratada como entrada não confiável: não execute automaticamente ficheiros enviados e mantenha o acesso ao servidor restrito.
+O padrão é Windows 11.
 
-## Estrutura
+Para usar Windows 10:
 
-.
-├── compose.yml
-├── .env.example
-├── nginx/
-│   ├── nginx.conf
-│   ├── portal.css
-│   └── portal.js
-└── upload-server/
-    ├── Dockerfile
-    ├── package.json
-    └── server.js
+```bash
+python3 main.py --windows-version 10
+```
 
-## Referências
+Isto só altera a configuração da VM; a instalação existente não é convertida automaticamente.
 
-- Microsoft — requisitos do Windows 11: https://www.microsoft.com/pt-pt/windows/windows-11-specifications
-- Microsoft — Windows: https://www.microsoft.com/pt-pt/windows
-- Dockur Windows — projeto e requisitos: https://github.com/dockur/windows
-- Dockur Windows — variáveis de ambiente: https://github.com/dockur/windows/blob/master/docs/environment.md
-- noVNC — interface de teclado em dispositivos táteis: https://github.com/novnc/noVNC/blob/master/vnc.html
+## Comandos úteis
 
+Verificar o servidor sem iniciar a VM:
 
-## Launcher Python
+```bash
+python3 main.py --check-only
+```
 
-O projeto tem um ponto de entrada em Python que funciona sem bibliotecas externas:
+Iniciar:
 
-    python3 main.py
-
-O launcher verifica Python, KVM, RAM, espaço livre, Docker e Docker Compose; cria o .env na primeira execução; e depois inicia a stack.
-
-Verificação sem iniciar:
-
-    python3 main.py --check-only
-
-Iniciar com os valores definidos no .env:
-
-    python3 main.py
-
-Forçar uma configuração:
-
-    python3 main.py --ram 8G --disk 100G --cpu 4
+```bash
+python3 main.py
+```
 
 Ver estado:
 
-    python3 main.py --status
+```bash
+python3 main.py --status
+```
 
 Ver logs:
 
-    python3 main.py --logs
+```bash
+python3 main.py --logs
+```
 
 Parar:
 
-    python3 main.py --down
+```bash
+python3 main.py --down
+```
 
-Windows 10 pode ser escolhido explicitamente, sem alterar o padrão do projeto:
+Alterar recursos:
 
-    python3 main.py --windows-version 10
+```bash
+python3 main.py --ram 8G --disk 100G --cpu 4
+```
 
-O launcher não instala Docker nem altera a BIOS/UEFI automaticamente. Quando o host não oferece KVM/nested virtualization, ele pára com uma mensagem clara.
+## Segurança
+
+Não publiques diretamente a porta VNC (`5900`) na Internet. O acesso de browser deve ser feito através do noVNC e da camada de proxy/HTTPS disponibilizada pela hospedagem.
+
+Usa uma conta Windows própria e uma configuração de autenticação/rede adequada para o teu caso.
+
+## Estrutura
+
+```text
+.
+├── main.py
+├── .env.example
+├── .gitignore
+└── .github/
+    └── workflows/
+        └── validate.yml
+```
+
+Não há Docker, Compose, Nginx ou Node neste projeto.
+
+## Licenciamento do Windows
+
+O projeto apenas arranca a VM. A instalação e ativação do Windows devem ser feitas com uma licença e meios de instalação apropriados.
