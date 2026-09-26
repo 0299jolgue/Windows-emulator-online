@@ -21,7 +21,7 @@ RUN_DIR = DATA_DIR / "run"
 LOG_DIR = DATA_DIR / "logs"
 RUNTIME_DIR = DATA_DIR / "runtime"
 PYTHON_RUNTIME_DIR = RUNTIME_DIR / "python-packages"
-BUNDLED_QEMU_VERSION = "0.5.7"
+BUNDLED_QEMU_VERSION = "0.5.11"
 
 PID_FILES = {
     "qemu": RUN_DIR / "qemu.pid",
@@ -589,7 +589,7 @@ def start_process(
     handle = open(log_path, "ab", buffering=0)
     env = os.environ.copy()
     bundled_lib = PYTHON_RUNTIME_DIR / "quicksand_qemu" / "lib"
-    if bundled_lib.exists():
+    if name == "qemu" and bundled_lib.exists():
         previous = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = str(bundled_lib) + (os.pathsep + previous if previous else "")
     process = subprocess.Popen(
