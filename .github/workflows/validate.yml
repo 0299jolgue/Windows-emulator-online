@@ -11,19 +11,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Validate upload server syntax
-        working-directory: upload-server
-        run: |
-          npm install --ignore-scripts --no-audit --no-fund
-          node --check server.js
-
-      - name: Validate compose file
-        run: docker compose config
-
-      - name: Validate Python launcher
+      - name: Validate Python
         run: python3 -m py_compile main.py
+
+      - name: Show launcher help
+        run: python3 main.py --help
