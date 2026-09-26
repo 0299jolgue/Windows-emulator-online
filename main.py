@@ -142,6 +142,8 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
     defaults = {
         "WINDOWS_VERSION": args.windows_version or "11",
         "WINDOWS_ISO": "data/Windows11.iso",
+        "AUTO_DOWNLOAD_ISO": "Y",
+        "WINDOWS_ISO_LANGUAGE": "Portuguese",
         "WINDOWS_DISK": "data/windows/windows.qcow2",
         "WINDOWS_DISK_SIZE": args.disk or "100G",
         "WINDOWS_CPU": str(args.cpu or 4),
@@ -830,6 +832,148 @@ def prepare_ovmf_vars(template: Path, target: Path) -> None:
     ok(f"Variáveis UEFI criadas: {target}")
 
 
+def ensure_windows_iso(values: dict[str, str], iso_path: Path) -> bool:
+    """Obtém automaticamente a ISO x64 atual do Windows 11 a partir da Microsoft."""
+    if iso_path.exists() and iso_path.stat().st_size > 100 * 1024 * 1024:
+        ok(f"ISO do Windows encontrada: {iso_path}")
+        return True
+    if values.get("AUTO_DOWNLOAD_ISO", "Y").upper() != "Y":
+        return False
+
+    import json
+    import urllib.parse
+    import urllib.request
+    import uuid
+    import http.cookiejar
+
+    locale = values.get("WINDOWS_ISO_LANGUAGE", "Portuguese").strip() or "Portuguese"
+    page_url = "https://www.microsoft.com/en-us/software-download/windows11"
+    api_base = "https://www.microsoft.com/software-download-connector/api"
+    session_id = str(uuid.uuid4())
+    user_agent = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131 Safari/537.36"
+    )
+    product_ids = [3321, 3262, 3113]
+
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+    def api_json(url: str, method: str = "GET", data: bytes | None = None):
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers={
+                "User-Agent": user_agent,
+                "Accept": "application/json, text/plain, */*",
+                "Referer": page_url,
+                "Origin": "https://www.microsoft.com",
+            },
+        )
+        with opener.open(req, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8-sig"))
+
+    info("A procurar automaticamente a ISO x64 do Windows 11 na Microsoft...")
+
+    try:
+        opener.open(
+            urllib.request.Request(
+                "https://vlscppe.microsoft.com/tags"
+                f"?org_id=y6jn8c31&session_id={session_id}",
+                headers={"User-Agent": user_agent, "Referer": page_url},
+            ),
+            timeout=20,
+        ).read()
+    except Exception:
+        pass
+
+    download_url = None
+    selected_name = "Win11_x64.iso"
+
+    for product_id in product_ids:
+        try:
+            sku_url = (
+                f"{api_base}/getskuinformationbyproductedition?"
+                f"profile=606624d44113&Locale=en-US&sessionID={session_id}"
+                f"&ProductEditionId={product_id}&SKU=undefined"
+                "&friendlyFileName=undefined"
+            )
+            sku_data = api_json(sku_url)
+            skus = sku_data.get("Skus") or sku_data.get("SKUs") or []
+            if not skus:
+                continue
+
+            wanted = locale.casefold()
+            candidates = sorted(
+                skus,
+                key=lambda sku: (
+                    0 if wanted in str(sku).casefold() else 1,
+                    0 if "portuguese" in str(sku).casefold() else 1,
+                    0 if "english international" in str(sku).casefold() else 1,
+                ),
+            )
+
+            for sku in candidates:
+                sku_id = sku.get("Id") or sku.get("SkuId")
+                language = sku.get("Language") or sku.get("LanguageName") or locale
+                if not sku_id:
+                    continue
+
+                link_url = (
+                    f"{api_base}/GetProductDownloadLinksBySku?"
+                    f"profile=606624d44113&Locale=en-US&sessionID={session_id}"
+                    f"&SKU={urllib.parse.quote(str(sku_id))}"
+                    "&friendlyFileName=undefined&ProductEditionId=undefined"
+                    f"&language={urllib.parse.quote(str(language))}"
+                )
+                data = api_json(link_url, method="POST", data=b"")
+                for link in data.get("ProductDownloadLinks") or []:
+                    if str(link.get("DownloadType", "")).lower() in {"isox64", "iso_x64"}:
+                        download_url = link.get("Uri") or link.get("Url")
+                        selected_name = link.get("FileName") or selected_name
+                        break
+                if download_url:
+                    break
+            if download_url:
+                break
+        except Exception as exc:
+            warn(f"Falha ao obter a ISO pela edição {product_id}: {exc}")
+
+    if not download_url:
+        warn("A Microsoft não devolveu uma URL temporária para a ISO.")
+        return False
+
+    iso_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = iso_path.with_suffix(iso_path.suffix + ".part")
+    info(f"A descarregar ISO do Windows 11 ({selected_name})...")
+    try:
+        req = urllib.request.Request(
+            download_url,
+            headers={"User-Agent": user_agent, "Referer": page_url},
+        )
+        with opener.open(req, timeout=60) as response, open(partial, "wb") as handle:
+            total = int(response.headers.get("Content-Length", "0") or 0)
+            written = 0
+            while True:
+                chunk = response.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                written += len(chunk)
+                if total and written // (256 * 1024 * 1024) != (written - len(chunk)) // (256 * 1024 * 1024):
+                    info(f"ISO: {written / 1024**3:.2f} / {total / 1024**3:.2f} GiB")
+        if partial.stat().st_size < 100 * 1024 * 1024:
+            raise RuntimeError("O download terminou com um ficheiro demasiado pequeno.")
+        partial.replace(iso_path)
+        ok(f"ISO do Windows 11 descarregada: {iso_path}")
+        return True
+    except Exception as exc:
+        partial.unlink(missing_ok=True)
+        warn(f"Falha ao descarregar a ISO do Windows 11: {exc}")
+        return False
+
+
 def build_qemu_command(
     values: dict[str, str],
     qemu: str,
@@ -1001,6 +1145,12 @@ def start_vm(values: dict[str, str], qemu: str, novnc: str, use_kvm: bool) -> No
     disk_path = ROOT / values["WINDOWS_DISK"]
     iso_path = ROOT / values["WINDOWS_ISO"]
     disk_size = values["WINDOWS_DISK_SIZE"]
+
+    if not ensure_windows_iso(values, iso_path):
+        raise RuntimeError(
+            f"Não foi possível obter a ISO automaticamente: {iso_path}. "
+            "Define WINDOWS_ISO para uma ISO local ou tenta novamente mais tarde."
+        )
 
     ram_gib = parse_gib(values["WINDOWS_RAM"])
     disk_size_gib = parse_gib(disk_size)
