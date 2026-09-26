@@ -110,7 +110,7 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
         "WINDOWS_DISK": "data/windows/windows.qcow2",
         "WINDOWS_DISK_SIZE": args.disk or "100G",
         "WINDOWS_CPU": str(args.cpu or 4),
-        "WINDOWS_RAM": args.ram or "8G",
+        "WINDOWS_RAM": args.ram or "6G",
         "VNC_BIND": "127.0.0.1",
         "VNC_PORT": "5900",
         "NOVNC_BIND": "0.0.0.0",
@@ -143,6 +143,19 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
                 changed = True
         if changed:
             write_env(values)
+
+    # A .env antigo pode ter sido criado antes de conhecermos o limite real do container.
+    # Ajusta automaticamente a RAM da VM para deixar ~0.75 GiB de margem para o processo.
+    auto_tune = os.environ.get("AUTO_TUNE_RESOURCES", "Y").upper() == "Y"
+    if auto_tune and values:
+        limit_gib = cgroup_memory_limit_gib()
+        if limit_gib is not None:
+            current_ram = parse_gib(values.get("WINDOWS_RAM", "6G"))
+            safe_ram = max(4.0, float(int(max(4.0, limit_gib - 1.0))))
+            if current_ram > safe_ram:
+                values["WINDOWS_RAM"] = f"{safe_ram:g}G"
+                write_env(values)
+                warn(f"RAM da VM ajustada automaticamente para {safe_ram:g}G para respeitar o limite real do hosting.")
 
     return values
 
@@ -332,13 +345,44 @@ def try_install_system_dependencies() -> bool:
     return True
 
 
-def ensure_runtime_dependencies() -> None:
-    # Try once before failing. This works on root containers/VMs or hosts with
-    # passwordless sudo. On locked-down shared hosting, the final error explains
-    # exactly which host capability is missing.
-    if command_exists("qemu-system-x86_64") and command_exists("qemu-img"):
+def try_install_user_novnc() -> None:
+    if command_exists("novnc_proxy"):
         return
-    try_install_system_dependencies()
+    if not shutil.which("git"):
+        return
+
+    target = RUNTIME_DIR / "novnc"
+    proxy = target / "utils" / "novnc_proxy"
+    if proxy.exists():
+        return
+
+    info("noVNC não está instalado; a tentar obter uma cópia local...")
+    result = subprocess.run(
+        ["git", "clone", "--depth", "1", "https://github.com/novnc/noVNC.git", str(target)],
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0 and proxy.exists():
+        ok("noVNC local preparado.")
+    else:
+        warn("Não foi possível obter noVNC automaticamente.")
+
+
+def ensure_runtime_dependencies() -> None:
+    needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
+    needs_novnc = not command_exists("novnc_proxy")
+    try:
+        find_ovmf(read_env())
+        needs_ovmf = False
+    except Exception:
+        needs_ovmf = True
+
+    if needs_qemu or needs_novnc or needs_ovmf:
+        try_install_system_dependencies()
+
+    try_install_user_novnc()
 
 
 def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
@@ -350,8 +394,8 @@ def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
 
     if not qemu:
         raise RuntimeError(
-            "qemu-system-x86_64 não está instalado. A hospedagem precisa permitir "
-            "a instalação/execução do QEMU; Python sozinho não consegue fornecer uma VM x86."
+            "qemu-system-x86_64 não está instalado e não foi possível instalá-lo automaticamente. "
+            "A hospedagem precisa permitir QEMU; Python sozinho não consegue fornecer a VM x86."
         )
     if not qemu_img:
         raise RuntimeError(
