@@ -21,7 +21,7 @@ RUN_DIR = DATA_DIR / "run"
 LOG_DIR = DATA_DIR / "logs"
 RUNTIME_DIR = DATA_DIR / "runtime"
 PYTHON_RUNTIME_DIR = RUNTIME_DIR / "python-packages"
-BUNDLED_QEMU_VERSION = "0.5.5"
+BUNDLED_QEMU_VERSION = "0.5.9"
 
 PID_FILES = {
     "qemu": RUN_DIR / "qemu.pid",
