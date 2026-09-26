@@ -187,14 +187,24 @@ def command_exists(name: str) -> str | None:
 
 
 def binary_works(path: Path | str) -> bool:
-    """Confirma que um binário arranca no glibc/libc real do host."""
+    """Confirma que um binário arranca com as bibliotecas portáteis, quando existirem."""
     try:
+        env = os.environ.copy()
+        package_root = Path(path).resolve().parent.parent
+        bundled_lib = package_root / "lib"
+        if bundled_lib.exists():
+            previous = env.get("LD_LIBRARY_PATH", "")
+            env["LD_LIBRARY_PATH"] = str(bundled_lib) + (
+                os.pathsep + previous if previous else ""
+            )
+
         result = subprocess.run(
             [str(path), "--version"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError):
         return False
