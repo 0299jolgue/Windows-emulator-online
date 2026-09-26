@@ -673,7 +673,6 @@ def build_qemu_command(
 
     command = [
         qemu,
-        qemu,
         "-name", "windows-emulator-online",
         "-machine", machine,
         "-cpu", cpu_model,
