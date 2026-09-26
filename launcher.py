@@ -114,7 +114,7 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
     if not values:
         values = {
             "WINDOWS_VERSION": args.windows_version or "11",
-            "WINDOWS_LANGUAGE": "pt-PT",
+            "WINDOWS_LANGUAGE": "Portuguese",
             "WINDOWS_REGION": "pt-PT",
             "WINDOWS_KEYBOARD": "pt-PT",
             "WINDOWS_USERNAME": "WindowsUser",
