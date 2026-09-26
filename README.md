@@ -116,36 +116,36 @@ Além disso, a opção de upload deve ser tratada como entrada não confiável: 
 
 O projeto tem um ponto de entrada em Python que funciona sem bibliotecas externas:
 
-    python3 launcher.py
+    python3 main.py
 
 O launcher verifica Python, KVM, RAM, espaço livre, Docker e Docker Compose; cria o .env na primeira execução; e depois inicia a stack.
 
 Verificação sem iniciar:
 
-    python3 launcher.py --check-only
+    python3 main.py --check-only
 
 Iniciar com os valores definidos no .env:
 
-    python3 launcher.py
+    python3 main.py
 
 Forçar uma configuração:
 
-    python3 launcher.py --ram 8G --disk 100G --cpu 4
+    python3 main.py --ram 8G --disk 100G --cpu 4
 
 Ver estado:
 
-    python3 launcher.py --status
+    python3 main.py --status
 
 Ver logs:
 
-    python3 launcher.py --logs
+    python3 main.py --logs
 
 Parar:
 
-    python3 launcher.py --down
+    python3 main.py --down
 
 Windows 10 pode ser escolhido explicitamente, sem alterar o padrão do projeto:
 
-    python3 launcher.py --windows-version 10
+    python3 main.py --windows-version 10
 
 O launcher não instala Docker nem altera a BIOS/UEFI automaticamente. Quando o host não oferece KVM/nested virtualization, ele pára com uma mensagem clara.
