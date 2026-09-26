@@ -19,6 +19,7 @@ ENV_EXAMPLE = ROOT / ".env.example"
 DATA_DIR = ROOT / "data"
 RUN_DIR = DATA_DIR / "run"
 LOG_DIR = DATA_DIR / "logs"
+RUNTIME_DIR = DATA_DIR / "runtime"
 
 PID_FILES = {
     "qemu": RUN_DIR / "qemu.pid",
@@ -219,71 +220,163 @@ def check_linux_and_kvm() -> bool:
     warn("TCG é bastante mais lento que KVM, mas não precisa de nested virtualization.")
     return False
 
-def check_resources(ram_gib: float, disk_gib: float) -> None:
-    meminfo = Path("/proc/meminfo")
-    if meminfo.exists():
-        total_gib = None
-        for line in meminfo.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if line.startswith("MemTotal:"):
-                total_gib = int(line.split()[1]) / (1024 * 1024)
-                break
+def cgroup_memory_limit_gib() -> float | None:
+    candidates = [
+        Path("/sys/fs/cgroup/memory.max"),
+        Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+    ]
+    for path in candidates:
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not raw or raw == "max":
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value <= 0 or value >= 1 << 60:
+            continue
+        return value / (1024**3)
+    return None
 
-        if total_gib is not None:
-            if total_gib < ram_gib:
-                raise RuntimeError(
-                    f"O host tem {total_gib:.1f} GiB de RAM e a VM pede {ram_gib:.1f} GiB."
-                )
-            if total_gib < 8:
-                warn(f"RAM total do host: {total_gib:.1f} GiB")
-            else:
-                ok(f"RAM total do host: {total_gib:.1f} GiB")
+
+def check_resources(ram_gib: float, disk_gib: float) -> None:
+    # /proc/meminfo normally shows the physical host RAM, which can be much larger
+    # than the memory quota assigned to this container. Prefer the cgroup limit.
+    limit_gib = cgroup_memory_limit_gib()
+    if limit_gib is not None:
+        usable_gib = max(0.0, limit_gib - 0.75)
+        if ram_gib > usable_gib:
+            raise RuntimeError(
+                f"A hospedagem limita este processo a cerca de {limit_gib:.1f} GiB de RAM. "
+                f"A VM pede {ram_gib:.1f} GiB. Usa menos RAM na VM "
+                f"(por exemplo 6G) ou aumenta o limite da hospedagem."
+            )
+        ok(f"Limite real de RAM do container: {limit_gib:.1f} GiB")
+    else:
+        warn("Não foi possível descobrir o limite real de RAM do container; não vou usar /proc/meminfo como limite.")
 
     free_gib = shutil.disk_usage(ROOT).free / (1024**3)
-    # qcow2 é criado como sparse/thin-provisioned: os 100G são capacidade máxima,
-    # não espaço imediatamente ocupado. Por isso não exigimos disk_gib + 10 GiB livres.
+    # qcow2 is sparse/thin-provisioned: disk_gib is a maximum capacity, not an
+    # immediate allocation. The actual storage use grows during Windows setup/use.
     if free_gib < 2:
         raise RuntimeError(
             f"Espaço livre crítico: {free_gib:.1f} GiB. "
-            "É necessário pelo menos algum espaço livre para arrancar a VM."
+            "É necessário espaço livre para criar os ficheiros da VM."
         )
     if free_gib < 12:
         warn(
             f"Espaço livre baixo: {free_gib:.1f} GiB. "
             f"O disco virtual pode ter até {disk_gib:.0f} GiB, "
-            "mas o espaço real usado aumenta conforme o Windows é instalado."
+            "mas o espaço real usado aumenta à medida que o Windows grava dados."
         )
     else:
         ok(f"Espaço livre: {free_gib:.1f} GiB")
 
 
+def privileged_prefix() -> list[str] | None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return []
+    sudo = shutil.which("sudo")
+    if sudo:
+        test = subprocess.run([sudo, "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        if test.returncode == 0:
+            return [sudo]
+    return None
+
+
+def try_install_system_dependencies() -> bool:
+    if os.environ.get("AUTO_INSTALL", "Y").upper() != "Y":
+        return False
+
+    prefix = privileged_prefix()
+    if prefix is None:
+        warn("Não tenho permissões para instalar pacotes do sistema automaticamente.")
+        return False
+
+    commands: list[list[str]] = []
+    if shutil.which("apt-get"):
+        commands = [
+            prefix + ["apt-get", "update"],
+            prefix + ["apt-get", "install", "-y", "qemu-system-x86", "qemu-utils", "ovmf", "novnc", "swtpm"],
+        ]
+    elif shutil.which("dnf"):
+        commands = [
+            prefix + ["dnf", "install", "-y", "qemu-system-x86-core", "qemu-img", "edk2-ovmf", "novnc", "swtpm"],
+        ]
+    elif shutil.which("pacman"):
+        commands = [
+            prefix + ["pacman", "-Sy", "--noconfirm", "qemu-desktop", "qemu-img", "edk2-ovmf", "novnc", "swtpm"],
+        ]
+    elif shutil.which("zypper"):
+        commands = [
+            prefix + ["zypper", "--non-interactive", "install", "qemu-x86", "qemu-tools", "ovmf", "novnc", "swtpm"],
+        ]
+    else:
+        return False
+
+    info("Algumas dependências do sistema estão em falta; a tentar instalá-las automaticamente...")
+    for command in commands:
+        result = subprocess.run(command, cwd=str(ROOT), text=True, capture_output=True, check=False)
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout or "").strip().splitlines()[-8:]
+            if tail:
+                for line in tail:
+                    warn(line)
+            warn("A instalação automática das dependências não foi concluída.")
+            return False
+
+    ok("Dependências do sistema instaladas.")
+    return True
+
+
+def ensure_runtime_dependencies() -> None:
+    # Try once before failing. This works on root containers/VMs or hosts with
+    # passwordless sudo. On locked-down shared hosting, the final error explains
+    # exactly which host capability is missing.
+    if command_exists("qemu-system-x86_64") and command_exists("qemu-img"):
+        return
+    try_install_system_dependencies()
+
+
 def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
+    ensure_runtime_dependencies()
+
     qemu = command_exists("qemu-system-x86_64")
     qemu_img = command_exists("qemu-img")
     novnc = command_exists("novnc_proxy")
 
     if not qemu:
-        raise RuntimeError("qemu-system-x86_64 não está instalado.")
+        raise RuntimeError(
+            "qemu-system-x86_64 não está instalado. A hospedagem precisa permitir "
+            "a instalação/execução do QEMU; Python sozinho não consegue fornecer uma VM x86."
+        )
     if not qemu_img:
-        raise RuntimeError("qemu-img não está instalado.")
+        raise RuntimeError(
+            "qemu-img não está instalado. A hospedagem precisa disponibilizar o pacote QEMU."
+        )
 
     if not novnc:
         candidates = [
             Path("/usr/share/novnc/utils/novnc_proxy"),
             Path("/usr/local/share/novnc/utils/novnc_proxy"),
+            RUNTIME_DIR / "novnc" / "utils" / "novnc_proxy",
         ]
         novnc_path = next((p for p in candidates if p.exists()), None)
         if not novnc_path:
             raise RuntimeError(
-                "Não encontrei noVNC (novnc_proxy). Instala noVNC no host."
+                "Não encontrei noVNC (novnc_proxy). A hospedagem precisa disponibilizar "
+                "noVNC ou permitir a sua instalação."
             )
         novnc = str(novnc_path)
 
-    ovmf_code, ovmf_vars = find_ovmf(values)
+    ovmf_code, _ = find_ovmf(values)
     ok(f"QEMU: {qemu}")
     ok(f"noVNC: {novnc}")
     ok(f"OVMF: {ovmf_code}")
     return qemu, qemu_img, novnc
-
 
 def validate(values: dict[str, str]) -> tuple[float, float, int]:
     version = values.get("WINDOWS_VERSION", "11")
@@ -313,6 +406,7 @@ def validate(values: dict[str, str]) -> tuple[float, float, int]:
 def ensure_dirs() -> None:
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "windows").mkdir(parents=True, exist_ok=True)
 
 
