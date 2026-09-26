@@ -1,2 +1,2 @@
-# QEMU pré-compilado e utilizável sem privilégios de root.
-quicksand-qemu==0.5.9
+# O runtime QEMU é descarregado como binário Linux estático em main.py.
+# Não depende de pacotes Python para fornecer QEMU.
