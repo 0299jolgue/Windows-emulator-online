@@ -673,7 +673,6 @@ def build_qemu_command(
 
     command = [
         qemu,
-        "-L", str(ovmf_code.parent),
         qemu,
         "-name", "windows-emulator-online",
         "-machine", machine,
@@ -690,6 +689,16 @@ def build_qemu_command(
         "-monitor", "none",
         "-serial", "none",
     ]
+
+    # O firmware portátil do pacote QEMU fica em share/qemu.
+    # Só passamos -L quando estamos a usar esse runtime local.
+    bundled_root = (PYTHON_RUNTIME_DIR / "quicksand_qemu" / "share" / "qemu").resolve()
+    try:
+        using_bundled_firmware = ovmf_code.resolve().parent == bundled_root
+    except OSError:
+        using_bundled_firmware = False
+    if using_bundled_firmware:
+        command[1:1] = ["-L", str(bundled_root)]
 
     if first_boot:
         command += ["-cdrom", str(iso_path)]
