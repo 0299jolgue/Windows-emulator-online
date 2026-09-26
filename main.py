@@ -592,6 +592,7 @@ def build_qemu_command(
         "-drive", f"if=pflash,format=raw,file={ovmf_vars}",
         "-drive", f"file={disk_path},format=qcow2,if=ide",
         "-nic", "user,model=e1000e",
+        "-device", "usb-tablet",
         "-vnc", f"{vnc_bind}:{vnc_display}",
         "-monitor", "none",
         "-serial", "none",
