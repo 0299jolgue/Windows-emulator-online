@@ -507,11 +507,19 @@ def try_install_user_novnc() -> None:
 
 
 def ensure_runtime_dependencies(values: dict[str, str]) -> None:
-    needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
+    bundled_qemu, bundled_qemu_img, _, _ = bundled_qemu_paths()
+    needs_qemu = (
+        (not command_exists("qemu-system-x86_64") and bundled_qemu is None)
+        or (not command_exists("qemu-img") and bundled_qemu_img is None)
+    )
     if needs_qemu and values.get("AUTO_INSTALL_QEMU", "Y").upper() == "Y":
         try_install_user_qemu()
 
-    needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
+    bundled_qemu, bundled_qemu_img, _, _ = bundled_qemu_paths()
+    needs_qemu = (
+        (not command_exists("qemu-system-x86_64") and bundled_qemu is None)
+        or (not command_exists("qemu-img") and bundled_qemu_img is None)
+    )
     needs_novnc = not command_exists("novnc_proxy")
     try:
         find_ovmf(read_env())
