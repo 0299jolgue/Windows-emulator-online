@@ -1,0 +1,2 @@
+# QEMU pré-compilado e utilizável sem privilégios de root.
+quicksand-qemu==0.5.11
