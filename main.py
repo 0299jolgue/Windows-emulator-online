@@ -927,8 +927,15 @@ def ensure_windows_iso(values: dict[str, str], iso_path: Path) -> bool:
                     "&friendlyFileName=undefined&ProductEditionId=undefined"
                     f"&language={urllib.parse.quote(str(language))}"
                 )
-                data = api_json(link_url, method="POST", data=b"")
-                for link in data.get("ProductDownloadLinks") or []:
+                # A API JSON atual da Microsoft aceita esta chamada como GET.
+                # O POST era o motivo do HTTP 405 observado no hosting.
+                data = api_json(link_url)
+                download_entries = (
+                    data.get("ProductDownloadLinks")
+                    or data.get("ProductDownloadOptions")
+                    or []
+                )
+                for link in download_entries:
                     if str(link.get("DownloadType", "")).lower() in {"isox64", "iso_x64"}:
                         download_url = link.get("Uri") or link.get("Url")
                         selected_name = link.get("FileName") or selected_name
