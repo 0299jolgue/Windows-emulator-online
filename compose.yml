@@ -1,0 +1,57 @@
+services:
+  windows:
+    image: dockurr/windows:latest
+    container_name: windows-online
+    environment:
+      VERSION: "${WINDOWS_VERSION:-11}"
+      LANGUAGE: "${WINDOWS_LANGUAGE:-pt-PT}"
+      REGION: "${WINDOWS_REGION:-pt-PT}"
+      KEYBOARD: "${WINDOWS_KEYBOARD:-pt-PT}"
+      USERNAME: "${WINDOWS_USERNAME:-WindowsUser}"
+      PASSWORD: "${WINDOWS_PASSWORD:-ChangeThisPassword123!}"
+      AUTOLOGIN: "${WINDOWS_AUTOLOGIN:-Y}"
+      CPU_CORES: "${WINDOWS_CPU:-4}"
+      RAM_SIZE: "${WINDOWS_RAM:-8G}"
+      DISK_SIZE: "${WINDOWS_DISK:-100G}"
+      WEB: "Y"
+      WEB_PORT: "8006"
+      SAMBA: "Y"
+      SHORTCUT: "Y"
+      PROTECT: "${WINDOWS_PROTECT:-N}"
+      AUDIO: "${WINDOWS_AUDIO:-N}"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./data/windows:/storage
+      - ./data/shared:/shared
+    restart: unless-stopped
+    stop_grace_period: 2m
+
+  uploader:
+    build:
+      context: ./upload-server
+    container_name: windows-uploader
+    environment:
+      PORT: "3000"
+      UPLOAD_DIR: "/shared"
+      MAX_FILE_SIZE: "${MAX_FILE_SIZE:-2147483648}"
+    volumes:
+      - ./data/shared:/shared
+    restart: unless-stopped
+
+  web:
+    image: nginx:1.29-alpine
+    container_name: windows-web
+    depends_on:
+      - windows
+      - uploader
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/portal.js:/usr/share/nginx/html/portal.js:ro
+      - ./nginx/portal.css:/usr/share/nginx/html/portal.css:ro
+    restart: unless-stopped

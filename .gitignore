@@ -1,0 +1,5 @@
+data/windows/
+data/shared/
+.env
+.DS_Store
+npm-debug.log
