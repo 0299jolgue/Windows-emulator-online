@@ -672,6 +672,7 @@ def build_qemu_command(
         cpu_model = "max"
 
     command = [
+        qemu,
         "-L", str(ovmf_code.parent),
         qemu,
         "-name", "windows-emulator-online",
