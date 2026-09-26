@@ -21,7 +21,7 @@ RUN_DIR = DATA_DIR / "run"
 LOG_DIR = DATA_DIR / "logs"
 RUNTIME_DIR = DATA_DIR / "runtime"
 PYTHON_RUNTIME_DIR = RUNTIME_DIR / "python-packages"
-BUNDLED_QEMU_VERSION = "0.5.11"
+BUNDLED_QEMU_VERSION = "0.5.5"
 
 PID_FILES = {
     "qemu": RUN_DIR / "qemu.pid",
@@ -184,6 +184,21 @@ def parse_gib(value: str) -> float:
 
 def command_exists(name: str) -> str | None:
     return shutil.which(name)
+
+
+def binary_works(path: Path | str) -> bool:
+    """Confirma que um binário arranca no glibc/libc real do host."""
+    try:
+        result = subprocess.run(
+            [str(path), "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def find_first(paths: list[str]) -> Path | None:
@@ -378,8 +393,13 @@ def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None, Path | 
     root = PYTHON_RUNTIME_DIR / "quicksand_qemu"
     qemu = root / "bin" / "qemu-system-x86_64"
     qemu_img = root / "bin" / "qemu-img"
-    if not qemu.exists():
+
+    # O pacote pode existir mas conter um binário incompatível com o glibc
+    # do host. Só o consideramos utilizável se o executável realmente iniciar.
+    if not qemu.exists() or not binary_works(qemu):
         return None, None, None, None
+    if not qemu_img.exists() or not binary_works(qemu_img):
+        qemu_img = None
 
     share_qemu = root / "share" / "qemu"
     code_candidates = [
@@ -400,22 +420,31 @@ def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None, Path | 
     return qemu, qemu_img if qemu_img.exists() else None, ovmf_code, ovmf_vars
 
 def try_install_user_qemu() -> bool:
-    """Instala QEMU pré-compilado no diretório do projeto, sem privilégios."""
+    """Instala QEMU pré-compilado no diretório do projeto, sem privilégios de root."""
     qemu, qemu_img, _, _ = bundled_qemu_paths()
     if qemu and qemu_img:
         return True
 
     PYTHON_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    info(f"A tentar preparar QEMU local ({BUNDLED_QEMU_VERSION}) sem root...")
+    info(
+        f"A tentar preparar QEMU local ({BUNDLED_QEMU_VERSION}) sem root "
+        "(versão compatível com hosts Linux mais antigos)..."
+    )
+
+    temp_target = PYTHON_RUNTIME_DIR / f".qemu-install-{BUNDLED_QEMU_VERSION}"
+    temp_qemu_root = temp_target / "quicksand_qemu"
+    shutil.rmtree(temp_target, ignore_errors=True)
+
     command = [
         sys.executable,
         "-m",
         "pip",
         "install",
         "--disable-pip-version-check",
+        "--no-cache-dir",
         "--no-deps",
         "--target",
-        str(PYTHON_RUNTIME_DIR),
+        str(temp_target),
         f"quicksand-qemu=={BUNDLED_QEMU_VERSION}",
     ]
     result = subprocess.run(command, cwd=str(ROOT), text=True, capture_output=True, check=False)
@@ -424,15 +453,30 @@ def try_install_user_qemu() -> bool:
         for line in tail:
             warn(line)
         warn("Não foi possível instalar o QEMU local via pip.")
+        shutil.rmtree(temp_target, ignore_errors=True)
         return False
 
-    qemu, qemu_img, _, _ = bundled_qemu_paths()
-    if qemu and qemu_img:
-        ok("QEMU local preparado sem root.")
-        return True
-    warn("O pacote QEMU foi instalado, mas os executáveis esperados não foram encontrados.")
-    return False
+    candidate_qemu = temp_qemu_root / "bin" / "qemu-system-x86_64"
+    candidate_img = temp_qemu_root / "bin" / "qemu-img"
+    if not candidate_qemu.exists() or not candidate_img.exists():
+        warn("O pacote QEMU foi instalado, mas os executáveis esperados não foram encontrados.")
+        shutil.rmtree(temp_target, ignore_errors=True)
+        return False
 
+    if not binary_works(candidate_qemu) or not binary_works(candidate_img):
+        warn(
+            f"O QEMU {BUNDLED_QEMU_VERSION} também não consegue arrancar neste host. "
+            "O binário será descartado."
+        )
+        shutil.rmtree(temp_target, ignore_errors=True)
+        return False
+
+    installed_root = PYTHON_RUNTIME_DIR / "quicksand_qemu"
+    shutil.rmtree(installed_root, ignore_errors=True)
+    temp_qemu_root.replace(installed_root)
+    shutil.rmtree(temp_target, ignore_errors=True)
+    ok(f"QEMU local preparado sem root ({BUNDLED_QEMU_VERSION}, glibc compatível).")
+    return True
 
 def try_install_system_dependencies(values: dict[str, str] | None = None) -> bool:
     if values is None:
@@ -663,7 +707,12 @@ def start_process(
     handle = open(log_path, "ab", buffering=0)
     env = os.environ.copy()
     bundled_lib = PYTHON_RUNTIME_DIR / "quicksand_qemu" / "lib"
-    if name == "qemu" and bundled_lib.exists():
+    using_bundled_qemu = (
+        name == "qemu"
+        and command
+        and Path(command[0]).resolve().parent.parent == PYTHON_RUNTIME_DIR / "quicksand_qemu"
+    )
+    if using_bundled_qemu and bundled_lib.exists():
         previous = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = str(bundled_lib) + (os.pathsep + previous if previous else "")
     process = subprocess.Popen(
