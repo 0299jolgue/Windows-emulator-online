@@ -4,7 +4,7 @@ services:
     container_name: windows-online
     environment:
       VERSION: "${WINDOWS_VERSION:-11}"
-      LANGUAGE: "${WINDOWS_LANGUAGE:-pt-PT}"
+      LANGUAGE: "${WINDOWS_LANGUAGE:-Portuguese}"
       REGION: "${WINDOWS_REGION:-pt-PT}"
       KEYBOARD: "${WINDOWS_KEYBOARD:-pt-PT}"
       USERNAME: "${WINDOWS_USERNAME:-WindowsUser}"
