@@ -21,7 +21,29 @@ RUN_DIR = DATA_DIR / "run"
 LOG_DIR = DATA_DIR / "logs"
 RUNTIME_DIR = DATA_DIR / "runtime"
 PYTHON_RUNTIME_DIR = RUNTIME_DIR / "python-packages"
-BUNDLED_QEMU_VERSION = "0.5.9"
+BUNDLED_QEMU_VERSION = "11.0.0.1"
+
+QEMU_RUNTIME_DIR = RUNTIME_DIR / "qemu-static"
+QEMU_BIN_DIR = QEMU_RUNTIME_DIR / "bin"
+QEMU_SHARE_DIR = QEMU_RUNTIME_DIR / "share" / "qemu"
+
+QEMU_ASSETS = {
+    "qemu-system-x86_64.tar.gz": (
+        "https://github.com/hermeticbuild/qemu-prebuilt/releases/download/"
+        "11.0.0.1/qemu-system-bin-linux-amd64-x86_64-softmmu-11.0.0.1.tar.gz",
+        "sha256:31399af8d874176f104679c6aae8c8741bcd86283dbc8de1fce8a140f67f1448",
+    ),
+    "qemu-img.tar.gz": (
+        "https://github.com/hermeticbuild/qemu-prebuilt/releases/download/"
+        "11.0.0.1/qemu-img-linux-amd64-11.0.0.1.tar.gz",
+        "sha256:4cab6e3f186ec6c500dd340f84b794f8320e3d58a2b2b9d2f835416589279d3e",
+    ),
+    "qemu-data.tar.gz": (
+        "https://github.com/hermeticbuild/qemu-prebuilt/releases/download/"
+        "11.0.0.1/qemu-system-data-linux-amd64-11.0.0.1.tar.gz",
+        "sha256:27e5a04a32d56783ebf8277140ec52304dd2376f97a1c01c36982bd228f37cfc",
+    ),
+}
 
 PID_FILES = {
     "qemu": RUN_DIR / "qemu.pid",
@@ -399,94 +421,127 @@ def privileged_prefix() -> list[str] | None:
 
 
 def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None, Path | None]:
-    """Procura o QEMU e o par UEFI no espaço do utilizador, sem root."""
-    root = PYTHON_RUNTIME_DIR / "quicksand_qemu"
-    qemu = root / "bin" / "qemu-system-x86_64"
-    qemu_img = root / "bin" / "qemu-img"
+    """Procura o QEMU estático e os ficheiros de firmware no espaço do projeto."""
+    qemu_candidates = [
+        QEMU_BIN_DIR / "qemu-system-x86_64",
+        QEMU_RUNTIME_DIR / "usr" / "bin" / "qemu-system-x86_64",
+        QEMU_RUNTIME_DIR / "qemu-system-x86_64",
+    ]
+    img_candidates = [
+        QEMU_BIN_DIR / "qemu-img",
+        QEMU_RUNTIME_DIR / "usr" / "bin" / "qemu-img",
+        QEMU_RUNTIME_DIR / "qemu-img",
+    ]
 
-    # O pacote pode existir mas conter um binário incompatível com o glibc
-    # do host. Só o consideramos utilizável se o executável realmente iniciar.
-    if not qemu.exists() or not binary_works(qemu):
-        return None, None, None, None
-    if not qemu_img.exists() or not binary_works(qemu_img):
+    qemu = next((path for path in qemu_candidates if path.exists()), None)
+    qemu_img = next((path for path in img_candidates if path.exists()), None)
+    if not qemu or not binary_works(qemu):
+        qemu = None
+    if not qemu_img or not binary_works(qemu_img):
         qemu_img = None
 
-    share_qemu = root / "share" / "qemu"
+    share_qemu = QEMU_SHARE_DIR
     code_candidates = [
         share_qemu / "edk2-x86_64-code.fd",
-        share_qemu / "ovmf-x86_64-4m-code.bin",
         share_qemu / "OVMF_CODE_4M.fd",
         share_qemu / "OVMF_CODE.fd",
+        share_qemu / "bios.bin",
     ]
     vars_candidates = [
         share_qemu / "edk2-i386-vars.fd",
         share_qemu / "edk2-x86_64-vars.fd",
-        share_qemu / "ovmf-x86_64-4m-vars.bin",
         share_qemu / "OVMF_VARS_4M.fd",
         share_qemu / "OVMF_VARS.fd",
     ]
     ovmf_code = next((p for p in code_candidates if p.exists()), None)
     ovmf_vars = next((p for p in vars_candidates if p.exists()), None)
-    return qemu, qemu_img if qemu_img.exists() else None, ovmf_code, ovmf_vars
+    return qemu, qemu_img, ovmf_code, ovmf_vars
 
-def try_install_user_qemu() -> bool:
-    """Instala QEMU pré-compilado no diretório do projeto, sem privilégios de root."""
+
+def download_checked(url: str, target: Path, expected_sha256: str) -> None:
+    import hashlib
+    import urllib.request
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    digest = expected_sha256.removeprefix("sha256:")
+    if target.exists():
+        if hashlib.sha256(target.read_bytes()).hexdigest() == digest:
+            return
+        target.unlink()
+
+    tmp = target.with_suffix(target.suffix + ".download")
+    try:
+        with urllib.request.urlopen(url, timeout=120) as response, open(tmp, "wb") as handle:
+            shutil.copyfileobj(response, handle)
+        actual = hashlib.sha256(tmp.read_bytes()).hexdigest()
+        if actual != digest:
+            raise RuntimeError(
+                f"checksum inválido para {target.name}: esperado {digest}, obtido {actual}"
+            )
+        tmp.replace(target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def safe_extract_tar(archive_path: Path, destination: Path) -> None:
+    import tarfile
+
+    destination.mkdir(parents=True, exist_ok=True)
+    destination_resolved = destination.resolve()
+    with tarfile.open(archive_path, "r:gz") as archive:
+        for member in archive.getmembers():
+            if member.issym() or member.islnk():
+                raise RuntimeError(f"O arquivo QEMU contém um link inesperado: {member.name}")
+            target = (destination / member.name).resolve()
+            if destination_resolved != target and destination_resolved not in target.parents:
+                raise RuntimeError(f"Caminho inseguro no arquivo QEMU: {member.name}")
+        archive.extractall(destination)
+
+
+def ensure_static_qemu() -> bool:
+    """Obtém QEMU estático sem root, apt, glibc específica ou pip."""
     qemu, qemu_img, _, _ = bundled_qemu_paths()
     if qemu and qemu_img:
         return True
 
-    PYTHON_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    info(
-        f"A tentar preparar QEMU local ({BUNDLED_QEMU_VERSION}) sem root "
-        "(versão compatível com hosts Linux mais antigos)..."
-    )
+    info(f"A preparar QEMU estático {BUNDLED_QEMU_VERSION} sem root...")
+    downloads_dir = QEMU_RUNTIME_DIR / ".downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
 
-    temp_target = PYTHON_RUNTIME_DIR / f".qemu-install-{BUNDLED_QEMU_VERSION}"
-    temp_qemu_root = temp_target / "quicksand_qemu"
-    shutil.rmtree(temp_target, ignore_errors=True)
+    try:
+        for filename, (url, checksum) in QEMU_ASSETS.items():
+            archive_path = downloads_dir / filename
+            if not archive_path.exists():
+                info(f"A descarregar {filename}...")
+            download_checked(url, archive_path, checksum)
 
-    command = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        "--no-cache-dir",
-        "--no-deps",
-        "--target",
-        str(temp_target),
-        f"quicksand-qemu=={BUNDLED_QEMU_VERSION}",
-    ]
-    result = subprocess.run(command, cwd=str(ROOT), text=True, capture_output=True, check=False)
-    if result.returncode != 0:
-        tail = (result.stderr or result.stdout or "").strip().splitlines()[-6:]
-        for line in tail:
-            warn(line)
-        warn("Não foi possível instalar o QEMU local via pip.")
-        shutil.rmtree(temp_target, ignore_errors=True)
+        if not QEMU_RUNTIME_DIR.exists():
+            QEMU_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Extrai cada arquivo no mesmo diretório; os archives preservam o layout
+        # do QEMU (bin/ e share/qemu/).
+        for filename in QEMU_ASSETS:
+            marker = QEMU_RUNTIME_DIR / f".extracted-{filename}"
+            if marker.exists():
+                continue
+            archive_path = downloads_dir / filename
+            safe_extract_tar(archive_path, QEMU_RUNTIME_DIR)
+            marker.write_text("ok", encoding="utf-8")
+
+        qemu, qemu_img, _, _ = bundled_qemu_paths()
+        if not qemu or not qemu_img:
+            raise RuntimeError("Os arquivos estáticos não criaram qemu-system-x86_64 e qemu-img.")
+
+        ok(f"QEMU estático {BUNDLED_QEMU_VERSION} preparado sem root.")
+        return True
+    except Exception as exc:
+        warn(f"Não foi possível preparar o QEMU estático: {exc}")
         return False
 
-    candidate_qemu = temp_qemu_root / "bin" / "qemu-system-x86_64"
-    candidate_img = temp_qemu_root / "bin" / "qemu-img"
-    if not candidate_qemu.exists() or not candidate_img.exists():
-        warn("O pacote QEMU foi instalado, mas os executáveis esperados não foram encontrados.")
-        shutil.rmtree(temp_target, ignore_errors=True)
-        return False
 
-    if not binary_works(candidate_qemu) or not binary_works(candidate_img):
-        warn(
-            f"O QEMU {BUNDLED_QEMU_VERSION} também não consegue arrancar neste host. "
-            "O binário será descartado."
-        )
-        shutil.rmtree(temp_target, ignore_errors=True)
-        return False
+def try_install_user_qemu() -> bool:
+    return ensure_static_qemu()
 
-    installed_root = PYTHON_RUNTIME_DIR / "quicksand_qemu"
-    shutil.rmtree(installed_root, ignore_errors=True)
-    temp_qemu_root.replace(installed_root)
-    shutil.rmtree(temp_target, ignore_errors=True)
-    ok(f"QEMU local preparado sem root ({BUNDLED_QEMU_VERSION}, glibc compatível).")
-    return True
 
 def try_install_system_dependencies(values: dict[str, str] | None = None) -> bool:
     if values is None:
@@ -716,15 +771,8 @@ def start_process(
     log_path = LOG_DIR / log_name
     handle = open(log_path, "ab", buffering=0)
     env = os.environ.copy()
-    bundled_lib = PYTHON_RUNTIME_DIR / "quicksand_qemu" / "lib"
-    using_bundled_qemu = (
-        name == "qemu"
-        and command
-        and Path(command[0]).resolve().parent.parent == PYTHON_RUNTIME_DIR / "quicksand_qemu"
-    )
-    if using_bundled_qemu and bundled_lib.exists():
-        previous = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = str(bundled_lib) + (os.pathsep + previous if previous else "")
+    # O QEMU portátil usado neste projeto é estático; não precisa de
+    # LD_LIBRARY_PATH nem das bibliotecas do host para arrancar.
     process = subprocess.Popen(
         command,
         cwd=str(ROOT),
@@ -816,15 +864,9 @@ def build_qemu_command(
         "-serial", "none",
     ]
 
-    # O firmware portátil do pacote QEMU fica em share/qemu.
-    # Só passamos -L quando estamos a usar esse runtime local.
-    bundled_root = (PYTHON_RUNTIME_DIR / "quicksand_qemu" / "share" / "qemu").resolve()
-    try:
-        using_bundled_firmware = ovmf_code.resolve().parent == bundled_root
-    except OSError:
-        using_bundled_firmware = False
-    if using_bundled_firmware:
-        command[1:1] = ["-L", str(bundled_root)]
+    # O runtime portátil traz os dados de firmware/keymaps em share/qemu.
+    if QEMU_SHARE_DIR.exists():
+        command[1:1] = ["-L", str(QEMU_SHARE_DIR.resolve())]
 
     if first_boot:
         command += ["-cdrom", str(iso_path)]
