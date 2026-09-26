@@ -9,6 +9,7 @@ services:
       KEYBOARD: "${WINDOWS_KEYBOARD:-pt-PT}"
       USERNAME: "${WINDOWS_USERNAME:-WindowsUser}"
       PASSWORD: "${WINDOWS_PASSWORD:-ChangeThisPassword123!}"
+      KEY: "${WINDOWS_KEY:-}"
       AUTOLOGIN: "${WINDOWS_AUTOLOGIN:-Y}"
       CPU_CORES: "${WINDOWS_CPU:-4}"
       RAM_SIZE: "${WINDOWS_RAM:-8G}"
