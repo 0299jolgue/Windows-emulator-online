@@ -239,12 +239,21 @@ def check_resources(ram_gib: float, disk_gib: float) -> None:
                 ok(f"RAM total do host: {total_gib:.1f} GiB")
 
     free_gib = shutil.disk_usage(ROOT).free / (1024**3)
-    if free_gib < disk_gib + 10:
+    # qcow2 é criado como sparse/thin-provisioned: os 100G são capacidade máxima,
+    # não espaço imediatamente ocupado. Por isso não exigimos disk_gib + 10 GiB livres.
+    if free_gib < 2:
         raise RuntimeError(
-            f"Espaço livre insuficiente: {free_gib:.1f} GiB. "
-            f"Liberta espaço antes de criares um disco de {disk_gib:.0f} GiB."
+            f"Espaço livre crítico: {free_gib:.1f} GiB. "
+            "É necessário pelo menos algum espaço livre para arrancar a VM."
         )
-    ok(f"Espaço livre: {free_gib:.1f} GiB")
+    if free_gib < 12:
+        warn(
+            f"Espaço livre baixo: {free_gib:.1f} GiB. "
+            f"O disco virtual pode ter até {disk_gib:.0f} GiB, "
+            "mas o espaço real usado aumenta conforme o Windows é instalado."
+        )
+    else:
+        ok(f"Espaço livre: {free_gib:.1f} GiB")
 
 
 def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
@@ -675,7 +684,7 @@ def stop_all() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Executa Windows diretamente com QEMU/KVM e noVNC."
+        description="Executa Windows diretamente com QEMU/KVM/TCG e noVNC."
     )
     parser.add_argument("--windows-version", choices=["10", "11"])
     parser.add_argument("--ram", help="RAM da VM, por exemplo 8G")
