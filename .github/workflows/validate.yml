@@ -26,4 +26,4 @@ jobs:
         run: docker compose config
 
       - name: Validate Python launcher
-        run: python3 -m py_compile launcher.py
+        run: python3 -m py_compile main.py
