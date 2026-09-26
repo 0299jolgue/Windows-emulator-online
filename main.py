@@ -205,19 +205,19 @@ def check_python() -> None:
     ok(f"Python {platform.python_version()}")
 
 
-def check_linux_and_kvm() -> None:
+def check_linux_and_kvm() -> bool:
+    """Retorna True para KVM e False para TCG (emulação por software)."""
     if platform.system() != "Linux":
         raise RuntimeError("Este projeto requer um host Linux.")
 
     kvm = Path("/dev/kvm")
-    if not kvm.exists():
-        raise RuntimeError(
-            "/dev/kvm não existe. A hospedagem precisa de KVM/nested virtualization."
-        )
-    if not os.access(kvm, os.R_OK | os.W_OK):
-        raise RuntimeError("/dev/kvm existe, mas não está acessível ao utilizador atual.")
-    ok("/dev/kvm disponível")
+    if kvm.exists() and os.access(kvm, os.R_OK | os.W_OK):
+        ok("/dev/kvm disponível — a usar aceleração KVM")
+        return True
 
+    warn("/dev/kvm não está disponível — a usar QEMU TCG (software).")
+    warn("TCG é bastante mais lento que KVM, mas não precisa de nested virtualization.")
+    return False
 
 def check_resources(ram_gib: float, disk_gib: float) -> None:
     meminfo = Path("/proc/meminfo")
