@@ -65,7 +65,7 @@ A primeira execução arranca pela ISO para instalar o Windows. Depois de a inst
 
 ## Subdomínio da hospedagem
 
-O noVNC fica por defeito na porta `6080`.
+O noVNC fica por defeito na porta `80`, porque esta hospedagem só permite publicar a porta 80.
 
 Na tua hospedagem, cria o site/subdomínio, por exemplo:
 
@@ -76,17 +76,17 @@ nomequemeter.shardweb.app
 e configura o proxy/encaminhamento desse domínio para:
 
 ```text
-127.0.0.1:6080
+127.0.0.1:80
 ```
 
-ou para a porta interna `6080` conforme o painel da hospedagem.
+ou para a porta interna `80` conforme o painel da hospedagem.
 
 Não é preciso Nginx dentro deste projeto. A própria hospedagem faz o encaminhamento do domínio para o noVNC.
 
 Para verificar sem domínio, abre:
 
 ```text
-http://IP_DO_SERVIDOR:6080/vnc.html
+http://IP_DO_SERVIDOR/vnc.html
 ```
 
 ## iPad e teclado
@@ -155,7 +155,7 @@ python3 main.py --ram 8G --disk 100G --cpu 4
 
 ## Segurança
 
-Não publiques diretamente a porta VNC (`5900`) na Internet. O acesso de browser deve ser feito através do noVNC e da camada de proxy/HTTPS disponibilizada pela hospedagem.
+Não publiques diretamente a porta VNC (`5900`) na Internet. O acesso de browser deve ser feito pelo noVNC na porta 80 e, quando disponível, pela camada HTTPS da própria hospedagem.
 
 Usa uma conta Windows própria e uma configuração de autenticação/rede adequada para o teu caso.
 
