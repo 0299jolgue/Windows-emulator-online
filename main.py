@@ -55,7 +55,7 @@ def fail(text: str) -> None:
 def title() -> None:
     print()
     print(color("Windows Emulator Online", "1;36"))
-    print(color("Linux → QEMU/KVM → Windows → noVNC", "90"))
+    print(color("Linux → QEMU/KVM/TCG → Windows → noVNC", "90"))
     print()
 
 
@@ -113,7 +113,7 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
         "VNC_BIND": "127.0.0.1",
         "VNC_PORT": "5900",
         "NOVNC_BIND": "0.0.0.0",
-        "NOVNC_PORT": "6080",
+        "NOVNC_PORT": "80",
         "NOVNC_WEB": "",
         "OVMF_CODE": "",
         "OVMF_VARS": "",
@@ -408,6 +408,7 @@ def build_qemu_command(
     iso_path: Path,
     first_boot: bool,
     tpm_socket: Path | None,
+    use_kvm: bool,
 ) -> list[str]:
     ram = values["WINDOWS_RAM"]
     cpu = values["WINDOWS_CPU"]
@@ -423,11 +424,18 @@ def build_qemu_command(
             "ou altera WINDOWS_ISO no .env."
         )
 
+    if use_kvm:
+        machine = "q35,accel=kvm"
+        cpu_model = "host"
+    else:
+        machine = "q35,accel=tcg"
+        cpu_model = "max"
+
     command = [
         qemu,
         "-name", "windows-emulator-online",
-        "-machine", "q35,accel=kvm",
-        "-cpu", "host",
+        "-machine", machine,
+        "-cpu", cpu_model,
         "-smp", cpu,
         "-m", ram,
         "-boot", "order=d" if first_boot else "order=c",
@@ -545,7 +553,7 @@ def start_novnc(values: dict[str, str], novnc: str) -> None:
     ok(f"noVNC disponível na porta {listen}")
 
 
-def start_vm(values: dict[str, str], qemu: str, novnc: str) -> None:
+def start_vm(values: dict[str, str], qemu: str, novnc: str, use_kvm: bool) -> None:
     ensure_dirs()
 
     if process_alive(pid_from_file("qemu")):
@@ -588,9 +596,10 @@ def start_vm(values: dict[str, str], qemu: str, novnc: str) -> None:
         iso_path,
         first_boot,
         tpm_socket,
+        use_kvm,
     )
 
-    info("A iniciar QEMU/KVM...")
+    info("A iniciar QEMU/KVM..." if use_kvm else "A iniciar QEMU TCG (software)...")
     start_process("qemu", command, "qemu.log")
     time.sleep(2)
 
@@ -704,7 +713,7 @@ def main() -> int:
             show_logs()
             return 0
 
-        check_linux_and_kvm()
+        use_kvm = check_linux_and_kvm()
         check_resources(ram_gib, disk_gib)
         qemu, _, novnc = check_tools(values)
         find_ovmf(values)
@@ -713,7 +722,7 @@ def main() -> int:
             ok("Todas as verificações passaram.")
             return 0
 
-        start_vm(values, qemu, novnc)
+        start_vm(values, qemu, novnc, use_kvm)
 
     except KeyboardInterrupt:
         print()
