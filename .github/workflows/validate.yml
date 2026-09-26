@@ -14,5 +14,8 @@ jobs:
       - name: Validate Python
         run: python3 -m py_compile main.py
 
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
       - name: Show launcher help
         run: python3 main.py --help
