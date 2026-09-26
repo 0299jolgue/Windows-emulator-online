@@ -25,7 +25,18 @@ BUNDLED_QEMU_VERSION = "11.0.0.1"
 
 QEMU_RUNTIME_DIR = RUNTIME_DIR / "qemu-static"
 QEMU_BIN_DIR = QEMU_RUNTIME_DIR / "bin"
-QEMU_SHARE_DIR = QEMU_RUNTIME_DIR / "share" / "qemu"
+
+
+def qemu_share_dir() -> Path | None:
+    candidates = [
+        QEMU_RUNTIME_DIR / "share" / "qemu",
+        QEMU_RUNTIME_DIR / "usr" / "share" / "qemu",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    matches = list(QEMU_RUNTIME_DIR.glob("**/share/qemu"))
+    return matches[0] if matches else None
 
 QEMU_ASSETS = {
     "qemu-system-x86_64.tar.gz": (
@@ -432,15 +443,20 @@ def bundled_qemu_paths() -> tuple[Path | None, Path | None, Path | None, Path | 
         QEMU_RUNTIME_DIR / "usr" / "bin" / "qemu-img",
         QEMU_RUNTIME_DIR / "qemu-img",
     ]
+    qemu_candidates.extend(QEMU_RUNTIME_DIR.glob("**/qemu-system-x86_64"))
+    img_candidates.extend(QEMU_RUNTIME_DIR.glob("**/qemu-img"))
 
-    qemu = next((path for path in qemu_candidates if path.exists()), None)
-    qemu_img = next((path for path in img_candidates if path.exists()), None)
+    qemu = next((path for path in qemu_candidates if path.is_file()), None)
+    qemu_img = next((path for path in img_candidates if path.is_file()), None)
     if not qemu or not binary_works(qemu):
         qemu = None
     if not qemu_img or not binary_works(qemu_img):
         qemu_img = None
 
-    share_qemu = QEMU_SHARE_DIR
+    share_qemu = qemu_share_dir()
+    if share_qemu is None:
+        return qemu, qemu_img, None, None
+
     code_candidates = [
         share_qemu / "edk2-x86_64-code.fd",
         share_qemu / "OVMF_CODE_4M.fd",
@@ -865,8 +881,9 @@ def build_qemu_command(
     ]
 
     # O runtime portátil traz os dados de firmware/keymaps em share/qemu.
-    if QEMU_SHARE_DIR.exists():
-        command[1:1] = ["-L", str(QEMU_SHARE_DIR.resolve())]
+    share_qemu = qemu_share_dir()
+    if share_qemu is not None:
+        command[1:1] = ["-L", str(share_qemu.resolve())]
 
     if first_boot:
         command += ["-cdrom", str(iso_path)]
