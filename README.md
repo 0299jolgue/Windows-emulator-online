@@ -17,11 +17,11 @@ subdomínio da hospedagem
       Windows
 ```
 
-O `main.py` prepara o armazenamento e inicia QEMU/KVM e noVNC diretamente no host.
+O `main.py` prepara o armazenamento e inicia QEMU/KVM e noVNC diretamente no host. Quando QEMU não existe no sistema, o projeto tenta usar uma cópia pré-compilada instalada pelo próprio Python, sem root.
 
 ## O que precisas na hospedagem
 
-O servidor precisa de permitir Linux e um processo persistente. KVM é opcional porque o projeto tem fallback para TCG. QEMU/OVMF/noVNC/swtpm são instalados automaticamente quando o sistema permite instalação; caso contrário, a hospedagem tem de os disponibilizar.
+O servidor precisa de permitir Linux e um processo persistente. KVM é opcional porque o projeto tem fallback para TCG. QEMU pode vir do sistema ou de uma cópia pré-compilada instalada via `pip` sem root; noVNC também pode ser obtido localmente. O hosting ainda precisa permitir processos persistentes e tráfego web na porta publicada.
 
 ## Configuração
 
@@ -140,8 +140,10 @@ python3 main.py --down
 Alterar recursos:
 
 ```bash
-python3 main.py --ram 8G --disk 100G --cpu 4
+python3 main.py --ram 10G --disk 100G --cpu 4
 ```
+
+O perfil padrão é 10G de RAM para a VM. O projeto reduz automaticamente esse valor apenas quando o limite real do container não deixa margem suficiente.
 
 ## Segurança
 
