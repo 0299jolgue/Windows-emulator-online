@@ -146,7 +146,7 @@ def ensure_env(args: argparse.Namespace) -> dict[str, str]:
 
     # A .env antigo pode ter sido criado antes de conhecermos o limite real do container.
     # Ajusta automaticamente a RAM da VM para deixar ~0.75 GiB de margem para o processo.
-    auto_tune = os.environ.get("AUTO_TUNE_RESOURCES", "Y").upper() == "Y"
+    auto_tune = values.get("AUTO_TUNE_RESOURCES", "Y").upper() == "Y"
     if auto_tune and values:
         limit_gib = cgroup_memory_limit_gib()
         if limit_gib is not None:
@@ -300,8 +300,10 @@ def privileged_prefix() -> list[str] | None:
     return None
 
 
-def try_install_system_dependencies() -> bool:
-    if os.environ.get("AUTO_INSTALL", "Y").upper() != "Y":
+def try_install_system_dependencies(values: dict[str, str] | None = None) -> bool:
+    if values is None:
+        values = read_env()
+    if values.get("AUTO_INSTALL", "Y").upper() != "Y":
         return False
 
     prefix = privileged_prefix()
@@ -370,7 +372,7 @@ def try_install_user_novnc() -> None:
         warn("Não foi possível obter noVNC automaticamente.")
 
 
-def ensure_runtime_dependencies() -> None:
+def ensure_runtime_dependencies(values: dict[str, str]) -> None:
     needs_qemu = not command_exists("qemu-system-x86_64") or not command_exists("qemu-img")
     needs_novnc = not command_exists("novnc_proxy")
     try:
@@ -380,13 +382,13 @@ def ensure_runtime_dependencies() -> None:
         needs_ovmf = True
 
     if needs_qemu or needs_novnc or needs_ovmf:
-        try_install_system_dependencies()
+        try_install_system_dependencies(values)
 
     try_install_user_novnc()
 
 
 def check_tools(values: dict[str, str]) -> tuple[str, str, str]:
-    ensure_runtime_dependencies()
+    ensure_runtime_dependencies(values)
 
     qemu = command_exists("qemu-system-x86_64")
     qemu_img = command_exists("qemu-img")
